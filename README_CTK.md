@@ -351,4 +351,7 @@ Inspired by VS Code, Sublime Text, and Atom.
 
 ---
 
+feel free to edit this code and i will be happy to get any feedback.
+this is completley coded by windsurf AI!
+
 **Enjoy coding with your new CustomTkinter IDE!** 🚀
