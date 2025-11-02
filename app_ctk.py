@@ -3,6 +3,7 @@ import os
 import subprocess
 import threading
 import re
+import shutil
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 import customtkinter as ctk
@@ -314,7 +315,7 @@ class CodeEditor(ctk.CTkFrame):
         self.line_numbers.redraw()
         
     def on_key_press(self, event):
-        """Handle key press for autocomplete navigation"""
+        """Handle key press for autocomplete navigation, bracket closing, and indentation"""
         # Handle autocomplete navigation when popup is visible
         if self.autocomplete.winfo_viewable():
             if event.keysym == "Escape":
@@ -329,6 +330,88 @@ class CodeEditor(ctk.CTkFrame):
             elif event.keysym == "Down":
                 self.autocomplete.navigate("down")
                 return "break"
+        
+        # Auto-indentation on Return key
+        if event.keysym == "Return":
+            return self.auto_indent()
+        
+        # Automatic bracket closing
+        bracket_pairs = {
+            '(': ')',
+            '[': ']',
+            '{': '}',
+            '"': '"',
+            "'": "'"
+        }
+        
+        if event.char in bracket_pairs:
+            # Get current cursor position
+            cursor_pos = self.text_widget.index("insert")
+            
+            # Check if the next character is not the closing bracket (to avoid duplicate)
+            next_char = self.text_widget.get(cursor_pos, f"{cursor_pos}+1c")
+            closing = bracket_pairs[event.char]
+            
+            # For quotes, only auto-close if next char is space or newline
+            if event.char in ['"', "'"]:
+                if next_char and next_char not in [' ', '\n', '\t', ')', ']', '}', ',', ';', ':']:
+                    return  # Don't auto-close
+            
+            # Insert both brackets at once in the correct order
+            self.text_widget.insert(cursor_pos, event.char + closing)
+            # Move cursor between brackets (after opening bracket)
+            self.text_widget.mark_set("insert", f"{cursor_pos}+1c")
+            
+            return "break"  # Prevent default behavior
+        
+        # Skip over closing brackets if they're already there
+        skip_chars = [')', ']', '}']
+        if event.char in skip_chars:
+            cursor_pos = self.text_widget.index("insert")
+            next_char = self.text_widget.get(cursor_pos, f"{cursor_pos}+1c")
+            if next_char == event.char:
+                self.text_widget.mark_set("insert", f"{cursor_pos}+1c")
+                return "break"
+    
+    def auto_indent(self):
+        """Auto-indent when Return key is pressed"""
+        # Get current cursor position
+        cursor_pos = self.text_widget.index("insert")
+        line, col = map(int, cursor_pos.split('.'))
+        
+        # Get current line text
+        current_line = self.text_widget.get(f"{line}.0", f"{line}.end")
+        
+        # Calculate current indentation
+        indent = 0
+        for char in current_line:
+            if char == ' ':
+                indent += 1
+            elif char == '\t':
+                indent += 4  # Treat tab as 4 spaces
+            else:
+                break
+        
+        # Check if the line ends with certain characters that require extra indentation
+        stripped_line = current_line.strip()
+        extra_indent = 0
+        
+        # For Python, check if line ends with colon
+        if self.language == 'python' and stripped_line.endswith(':'):
+            extra_indent = 4
+        # For C-style languages, check if line ends with opening brace
+        elif self.language in ['javascript', 'java', 'cpp', 'c', 'csharp'] and stripped_line.endswith('{'):
+            extra_indent = 4
+        
+        # Insert newline
+        self.text_widget.insert(cursor_pos, '\n')
+        
+        # Insert indentation
+        total_indent = indent + extra_indent
+        if total_indent > 0:
+            self.text_widget.insert("insert", ' ' * total_indent)
+        
+        return "break"  # Prevent default behavior
     
     def on_key_release(self, event):
         """Handle key release for syntax highlighting and autocomplete"""
@@ -499,8 +582,9 @@ class FileExplorer(ctk.CTkFrame):
         scrollbar.pack(side="right", fill="y")
         self.tree.configure(yscrollcommand=scrollbar.set)
         
-        # Bind double-click
+        # Bind double-click and right-click
         self.tree.bind("<Double-1>", self.on_double_click)
+        self.tree.bind("<Button-3>", self.show_context_menu)  # Right-click
         
         # Load current directory
         self.load_directory(os.getcwd())
@@ -545,6 +629,329 @@ class FileExplorer(ctk.CTkFrame):
                 path = values[0]
                 if os.path.isfile(path):
                     self.on_file_open(path)
+    
+    def show_context_menu(self, event):
+        """Show right-click context menu"""
+        # Select the item under cursor
+        item = self.tree.identify_row(event.y)
+        if item:
+            self.tree.selection_set(item)
+        
+        # Create context menu
+        menu = tk.Menu(self, tearoff=0, bg=VSCODE_COLORS['bg_darker'], fg=VSCODE_COLORS['text_primary'])
+        
+        # Get selected path
+        selection = self.tree.selection()
+        current_path = self.root_path
+        
+        if selection:
+            values = self.tree.item(selection[0], "values")
+            if values:
+                path = values[0]
+                if os.path.isdir(path):
+                    current_path = path
+                else:
+                    current_path = os.path.dirname(path)
+        
+        # Add menu items
+        menu.add_command(label="📄 New File", command=lambda: self.create_new_file(current_path))
+        menu.add_command(label="📁 New Folder", command=lambda: self.create_new_folder(current_path))
+        menu.add_separator()
+        
+        if selection:
+            values = self.tree.item(selection[0], "values")
+            if values and values[0] != self.root_path:
+                menu.add_command(label="✏️ Rename", command=lambda: self.rename_item(values[0]))
+                menu.add_command(label="🗑️ Delete", command=lambda: self.delete_item(values[0]))
+        
+        menu.add_separator()
+        menu.add_command(label="🔄 Refresh", command=lambda: self.load_directory(self.root_path))
+        
+        # Show menu
+        menu.post(event.x_root, event.y_root)
+    
+    def create_new_file(self, directory):
+        """Create a new file in the directory"""
+        # Simple dialog to get filename
+        dialog = ctk.CTkInputDialog(
+            text="Enter file name:",
+            title="New File"
+        )
+        filename = dialog.get_input()
+        
+        if filename:
+            filepath = os.path.join(directory, filename)
+            try:
+                # Create empty file
+                with open(filepath, 'w') as f:
+                    f.write("")
+                
+                # Refresh explorer
+                self.load_directory(self.root_path)
+                
+                # Open the new file
+                self.on_file_open(filepath)
+                
+                messagebox.showinfo("Success", f"Created {filename}")
+            except Exception as e:
+                messagebox.showerror("Error", f"Could not create file: {str(e)}")
+    
+    def create_new_folder(self, directory):
+        """Create a new folder in the directory"""
+        dialog = ctk.CTkInputDialog(
+            text="Enter folder name:",
+            title="New Folder"
+        )
+        foldername = dialog.get_input()
+        
+        if foldername:
+            folderpath = os.path.join(directory, foldername)
+            try:
+                os.makedirs(folderpath, exist_ok=True)
+                self.load_directory(self.root_path)
+                messagebox.showinfo("Success", f"Created folder {foldername}")
+            except Exception as e:
+                messagebox.showerror("Error", f"Could not create folder: {str(e)}")
+    
+    def rename_item(self, path):
+        """Rename a file or folder"""
+        old_name = os.path.basename(path)
+        dialog = ctk.CTkInputDialog(
+            text=f"Rename '{old_name}' to:",
+            title="Rename"
+        )
+        new_name = dialog.get_input()
+        
+        if new_name and new_name != old_name:
+            new_path = os.path.join(os.path.dirname(path), new_name)
+            try:
+                os.rename(path, new_path)
+                self.load_directory(self.root_path)
+                messagebox.showinfo("Success", f"Renamed to {new_name}")
+            except Exception as e:
+                messagebox.showerror("Error", f"Could not rename: {str(e)}")
+    
+    def delete_item(self, path):
+        """Delete a file or folder"""
+        item_name = os.path.basename(path)
+        result = messagebox.askyesno(
+            "Confirm Delete",
+            f"Are you sure you want to delete '{item_name}'?\n\nThis cannot be undone!"
+        )
+        
+        if result:
+            try:
+                if os.path.isfile(path):
+                    os.remove(path)
+                elif os.path.isdir(path):
+                    shutil.rmtree(path)
+                
+                self.load_directory(self.root_path)
+                messagebox.showinfo("Success", f"Deleted {item_name}")
+            except Exception as e:
+                messagebox.showerror("Error", f"Could not delete: {str(e)}")
+
+
+class Terminal(ctk.CTkFrame):
+    """Integrated terminal widget"""
+    
+    def __init__(self, parent):
+        super().__init__(parent, fg_color="#1e1e1e")
+        
+        # Terminal output
+        self.output = tk.Text(
+            self,
+            bg="#0c0c0c",  # Dark terminal background
+            fg="#cccccc",
+            insertbackground="white",
+            font=("Consolas", 10),
+            wrap="word",
+            height=15
+        )
+        self.output.pack(fill="both", expand=True, padx=2, pady=2)
+        
+        # Input frame
+        input_frame = ctk.CTkFrame(self, fg_color="#1e1e1e", height=35)
+        input_frame.pack(fill="x", padx=2, pady=(0, 2))
+        
+        # Prompt label
+        prompt = ctk.CTkLabel(
+            input_frame,
+            text="$",
+            text_color="#4ec9b0",
+            font=("Consolas", 10, "bold"),
+            width=20
+        )
+        prompt.pack(side="left", padx=(5, 0))
+        
+        # Input entry
+        self.input = ctk.CTkEntry(
+            input_frame,
+            fg_color="#0c0c0c",
+            text_color="#cccccc",
+            border_width=0,
+            font=("Consolas", 10)
+        )
+        self.input.pack(side="left", fill="both", expand=True, padx=5)
+        
+        # Bind enter key to execute command
+        self.input.bind("<Return>", self.execute_command)
+        
+        # Command history
+        self.command_history = []
+        self.history_index = -1
+        
+        # Bind up/down arrows for history navigation
+        self.input.bind("<Up>", self.history_up)
+        self.input.bind("<Down>", self.history_down)
+        
+        # Current process
+        self.current_process = None
+        
+        # Working directory
+        self.cwd = os.getcwd()
+        
+        # Print welcome message
+        self.print_output(f"Terminal - {self.cwd}\n", "#4ec9b0")
+        self.print_output("Type 'help' for available commands\n\n", "#858585")
+        
+    def print_output(self, text, color="#cccccc"):
+        """Print text to terminal output"""
+        self.output.insert("end", text, "colored")
+        self.output.tag_config("colored", foreground=color)
+        self.output.see("end")
+        
+    def execute_command(self, event=None):
+        """Execute terminal command"""
+        command = self.input.get().strip()
+        
+        if not command:
+            return "break"
+        
+        # Add to history
+        self.command_history.append(command)
+        self.history_index = len(self.command_history)
+        
+        # Echo command
+        self.print_output(f"$ {command}\n", "#4ec9b0")
+        
+        # Clear input
+        self.input.delete(0, "end")
+        
+        # Handle built-in commands
+        if command == "clear" or command == "cls":
+            self.output.delete("1.0", "end")
+            return "break"
+        elif command == "help":
+            self.print_help()
+            return "break"
+        elif command.startswith("cd "):
+            self.change_directory(command[3:].strip())
+            return "break"
+        elif command == "pwd":
+            self.print_output(f"{self.cwd}\n", "#cccccc")
+            return "break"
+        elif command == "exit":
+            self.print_output("Use Ctrl+C to exit or close the application\n", "#858585")
+            return "break"
+        
+        # Execute system command
+        self.run_system_command(command)
+        
+        return "break"
+    
+    def change_directory(self, path):
+        """Change working directory"""
+        try:
+            if path:
+                new_path = os.path.abspath(os.path.join(self.cwd, path))
+                if os.path.isdir(new_path):
+                    self.cwd = new_path
+                    os.chdir(self.cwd)
+                    self.print_output(f"Changed to: {self.cwd}\n", "#4ec9b0")
+                else:
+                    self.print_output(f"Error: Directory not found: {path}\n", "#f48771")
+            else:
+                self.print_output(f"{self.cwd}\n", "#cccccc")
+        except Exception as e:
+            self.print_output(f"Error: {str(e)}\n", "#f48771")
+    
+    def print_help(self):
+        """Print help information"""
+        help_text = """
+Available built-in commands:
+  clear/cls  - Clear terminal screen
+  cd <path>  - Change directory
+  pwd        - Print working directory
+  help       - Show this help message
+  exit       - Information about exiting
+
+You can also run any system command (python, node, git, etc.)
+"""
+        self.print_output(help_text, "#858585")
+    
+    def run_system_command(self, command):
+        """Run system command in a thread"""
+        def run():
+            try:
+                # Run command
+                process = subprocess.Popen(
+                    command,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    shell=True,
+                    cwd=self.cwd
+                )
+                
+                self.current_process = process
+                
+                # Read output in real-time
+                for line in process.stdout:
+                    self.print_output(line, "#cccccc")
+                
+                # Read error output
+                stderr_output = process.stderr.read()
+                if stderr_output:
+                    self.print_output(stderr_output, "#f48771")
+                
+                # Wait for completion
+                process.wait()
+                
+                self.current_process = None
+                
+                # Print completion message
+                if process.returncode != 0:
+                    self.print_output(f"\nCommand exited with code {process.returncode}\n", "#f48771")
+                
+            except Exception as e:
+                self.print_output(f"Error: {str(e)}\n", "#f48771")
+        
+        # Run in thread to avoid blocking UI
+        threading.Thread(target=run, daemon=True).start()
+    
+    def history_up(self, event):
+        """Navigate command history up"""
+        if self.command_history and self.history_index > 0:
+            self.history_index -= 1
+            self.input.delete(0, "end")
+            self.input.insert(0, self.command_history[self.history_index])
+        return "break"
+    
+    def history_down(self, event):
+        """Navigate command history down"""
+        if self.command_history and self.history_index < len(self.command_history) - 1:
+            self.history_index += 1
+            self.input.delete(0, "end")
+            self.input.insert(0, self.command_history[self.history_index])
+        elif self.history_index >= len(self.command_history) - 1:
+            self.history_index = len(self.command_history)
+            self.input.delete(0, "end")
+        return "break"
+    
+    def clear(self):
+        """Clear terminal output"""
+        self.output.delete("1.0", "end")
 
 
 class ActivityBar(ctk.CTkFrame):
@@ -584,6 +991,16 @@ class ActivityBar(ctk.CTkFrame):
         )
         self.run_btn.pack(pady=5)
         
+        # Terminal button
+        self.terminal_btn = ctk.CTkButton(
+            self, text="💻", width=48, height=48,
+            font=("Segoe UI", 20),
+            fg_color="transparent",
+            hover_color=VSCODE_COLORS['accent_hover'],
+            command=lambda: callbacks.get('toggle_terminal', lambda: None)()
+        )
+        self.terminal_btn.pack(pady=5)
+        
         # Settings button (bottom)
         self.settings_btn = ctk.CTkButton(
             self, text="⚙️", width=48, height=48,
@@ -610,6 +1027,7 @@ class IDEApp(ctk.CTk):
         self.running_process = None
         self.editors = []  # List of editor tabs
         self.explorer_visible = True
+        self.terminal_visible = False
         
         # Create UI
         self.create_activity_bar()
@@ -627,6 +1045,7 @@ class IDEApp(ctk.CTk):
         callbacks = {
             'toggle_explorer': self.toggle_explorer,
             'run': self.run_code,
+            'toggle_terminal': self.toggle_terminal,
             'search': lambda: messagebox.showinfo("Search", "Search feature coming soon!"),
             'settings': lambda: messagebox.showinfo("Settings", "Settings coming soon!")
         }
@@ -641,6 +1060,15 @@ class IDEApp(ctk.CTk):
         else:
             self.sidebar_frame.pack(side="left", fill="y", after=self.activity_bar)
             self.explorer_visible = True
+    
+    def toggle_terminal(self):
+        """Toggle terminal visibility"""
+        if self.terminal_visible:
+            self.terminal_container.pack_forget()
+            self.terminal_visible = False
+        else:
+            self.terminal_container.pack(fill="both", expand=False, pady=(2, 0), after=self.output_container)
+            self.terminal_visible = True
         
     def create_main_layout(self):
         """Create main layout with sidebar, editor, and output"""
@@ -660,7 +1088,10 @@ class IDEApp(ctk.CTk):
         self.sidebar_frame.pack(side="left", fill="y")
         self.sidebar_frame.pack_propagate(False)
         
-        # Explorer title
+        # Create file explorer first (but don't pack yet)
+        self.file_explorer = FileExplorer(self.sidebar_frame, self.load_file)
+        
+        # Explorer title with buttons (pack this first)
         explorer_title = ctk.CTkFrame(self.sidebar_frame, fg_color=VSCODE_COLORS['bg_darker'], height=35)
         explorer_title.pack(fill="x", padx=5, pady=5)
         
@@ -672,8 +1103,43 @@ class IDEApp(ctk.CTk):
         )
         title_label.pack(side="left", padx=5)
         
-        # File explorer
-        self.file_explorer = FileExplorer(self.sidebar_frame, self.load_file)
+        # New file button
+        new_file_btn = ctk.CTkButton(
+            explorer_title,
+            text="📄",
+            width=30,
+            height=25,
+            fg_color="transparent",
+            hover_color=VSCODE_COLORS['accent_hover'],
+            command=lambda: self.file_explorer.create_new_file(self.file_explorer.root_path)
+        )
+        new_file_btn.pack(side="right", padx=2)
+        
+        # New folder button
+        new_folder_btn = ctk.CTkButton(
+            explorer_title,
+            text="📁",
+            width=30,
+            height=25,
+            fg_color="transparent",
+            hover_color=VSCODE_COLORS['accent_hover'],
+            command=lambda: self.file_explorer.create_new_folder(self.file_explorer.root_path)
+        )
+        new_folder_btn.pack(side="right", padx=2)
+        
+        # Refresh button
+        refresh_btn = ctk.CTkButton(
+            explorer_title,
+            text="🔄",
+            width=30,
+            height=25,
+            fg_color="transparent",
+            hover_color=VSCODE_COLORS['accent_hover'],
+            command=lambda: self.file_explorer.load_directory(self.file_explorer.root_path)
+        )
+        refresh_btn.pack(side="right", padx=2)
+        
+        # Now pack file explorer below the title
         self.file_explorer.pack(fill="both", expand=True, padx=5, pady=5)
         
         # Editor section
@@ -720,6 +1186,41 @@ class IDEApp(ctk.CTk):
         self.output_panel = OutputPanel(output_container)
         self.output_panel.pack(fill="both", expand=True, padx=5, pady=5)
         self.output_panel.configure(height=180)
+        
+        # Store output_container reference for terminal toggle
+        self.output_container = output_container
+        
+        # Terminal panel with title (hidden by default)
+        self.terminal_container = ctk.CTkFrame(editor_frame, fg_color=VSCODE_COLORS['bg_darker'])
+        
+        terminal_header = ctk.CTkFrame(self.terminal_container, fg_color=VSCODE_COLORS['bg_darker'], height=30)
+        terminal_header.pack(fill="x")
+        
+        terminal_title = ctk.CTkLabel(
+            terminal_header,
+            text="  TERMINAL",
+            font=("Segoe UI", 10, "bold"),
+            text_color=VSCODE_COLORS['text_primary'],
+            anchor="w"
+        )
+        terminal_title.pack(side="left", fill="x", padx=10)
+        
+        # Clear terminal button
+        clear_terminal_btn = ctk.CTkButton(
+            terminal_header,
+            text="🗑",
+            width=30,
+            height=25,
+            fg_color="transparent",
+            hover_color=VSCODE_COLORS['accent_hover'],
+            command=self.clear_terminal
+        )
+        clear_terminal_btn.pack(side="right", padx=5)
+        
+        # Terminal widget
+        self.terminal = Terminal(self.terminal_container)
+        self.terminal.pack(fill="both", expand=True, padx=5, pady=5)
+        self.terminal.configure(height=200)
     
     def create_menubar(self, parent):
         """Create VS Code-style menu bar"""
@@ -827,6 +1328,7 @@ class IDEApp(ctk.CTk):
         self.bind("<F9>", lambda e: self.debug_code())
         self.bind("<Shift-F5>", lambda e: self.stop_process())
         self.bind("<Control-b>", lambda e: self.build_project())
+        self.bind("<Control-grave>", lambda e: self.toggle_terminal())  # Ctrl+` (backtick) for terminal
         
     def detect_language(self, filename):
         """Detect programming language from file extension"""
@@ -941,6 +1443,11 @@ class IDEApp(ctk.CTk):
         """Clear output panel"""
         self.output_panel.clear_output()
         self.update_statusbar("Output cleared")
+    
+    def clear_terminal(self):
+        """Clear terminal panel"""
+        self.terminal.clear()
+        self.update_statusbar("Terminal cleared")
         
     def get_interpreter_command(self, language, filename):
         """Get command to run file"""
@@ -958,7 +1465,7 @@ class IDEApp(ctk.CTk):
         return commands.get(language, None)
         
     def run_code(self):
-        """Run current file"""
+        """Run current file with proper compilation for Java"""
         editor = self.get_current_editor()
         if not editor or not hasattr(editor, 'file_path') or not editor.file_path:
             messagebox.showwarning("No File", "Please save the file before running.")
@@ -976,21 +1483,60 @@ class IDEApp(ctk.CTk):
         self.output_panel.append_output(f"Language: {language}\n")
         self.output_panel.append_output("-" * 50 + "\n")
         
-        # Get command
-        command = self.get_interpreter_command(language, filename)
-        if not command:
-            self.output_panel.append_output(f"Error: No interpreter found for {language}\n")
-            return
-            
         # Run in thread
         def run_process():
             try:
+                working_dir = os.path.dirname(filename) if os.path.dirname(filename) else os.getcwd()
+                
+                # Java requires compilation first
+                if language == 'java':
+                    self.output_panel.append_output("🔨 Compiling Java code...\n")
+                    
+                    # Compile Java file
+                    compile_process = subprocess.Popen(
+                        ['javac', filename],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        cwd=working_dir
+                    )
+                    
+                    compile_stdout, compile_stderr = compile_process.communicate()
+                    
+                    if compile_process.returncode != 0:
+                        self.output_panel.append_output(f"❌ Compilation failed:\n")
+                        if compile_stderr:
+                            self.output_panel.append_output(compile_stderr)
+                        if compile_stdout:
+                            self.output_panel.append_output(compile_stdout)
+                        self.running_process = None
+                        self.update_statusbar("Compilation failed")
+                        return
+                    
+                    self.output_panel.append_output("✓ Compilation successful\n")
+                    self.output_panel.append_output("▶ Running Java program...\n\n")
+                    
+                    # Get class name (without .java extension)
+                    class_name = os.path.basename(filename).replace('.java', '')
+                    command = ['java', class_name]
+                else:
+                    # For other languages, get the command directly
+                    command = self.get_interpreter_command(language, filename)
+                    if not command:
+                        self.output_panel.append_output(f"Error: No interpreter found for {language}\n")
+                        self.output_panel.append_output(f"Please install the required runtime:\n")
+                        self.output_panel.append_output(f"  - Python: python.org\n")
+                        self.output_panel.append_output(f"  - Node.js: nodejs.org\n")
+                        self.output_panel.append_output(f"  - Java: oracle.com/java\n")
+                        return
+                
+                # Execute the program
                 process = subprocess.Popen(
                     command,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,
-                    cwd=os.path.dirname(filename)
+                    cwd=working_dir
                 )
                 self.running_process = process
                 
@@ -1010,9 +1556,25 @@ class IDEApp(ctk.CTk):
                     
                 self.running_process = None
                 self.update_statusbar(f"Process finished with exit code {process.returncode}")
+            except FileNotFoundError as e:
+                error_msg = str(e)
+                if 'javac' in error_msg or 'java' in error_msg:
+                    self.output_panel.append_output("\n❌ Java compiler not found!\n")
+                    self.output_panel.append_output("Please install Java JDK from: https://www.oracle.com/java/technologies/downloads/\n")
+                elif 'node' in error_msg:
+                    self.output_panel.append_output("\n❌ Node.js not found!\n")
+                    self.output_panel.append_output("Please install Node.js from: https://nodejs.org/\n")
+                elif 'python' in error_msg:
+                    self.output_panel.append_output("\n❌ Python not found!\n")
+                    self.output_panel.append_output("Please install Python from: https://www.python.org/\n")
+                else:
+                    self.output_panel.append_output(f"\nError: {error_msg}\n")
+                self.running_process = None
+                self.update_statusbar("Execution failed")
             except Exception as e:
                 self.output_panel.append_output(f"\nError: {str(e)}\n")
                 self.running_process = None
+                self.update_statusbar("Execution failed")
                 
         threading.Thread(target=run_process, daemon=True).start()
         self.update_statusbar(f"Running {os.path.basename(filename)}...")
@@ -1077,12 +1639,14 @@ class IDEApp(ctk.CTk):
         # Build in thread
         def build_process():
             try:
+                working_dir = os.path.dirname(filename) if os.path.dirname(filename) else os.getcwd()
+                
                 process = subprocess.Popen(
                     command,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,
-                    cwd=os.path.dirname(filename)
+                    cwd=working_dir
                 )
                 
                 stdout, stderr = process.communicate()
@@ -1095,12 +1659,26 @@ class IDEApp(ctk.CTk):
                 self.output_panel.append_output("\n" + "-" * 50 + "\n")
                 if process.returncode == 0:
                     self.output_panel.append_output("✓ Build successful!\n")
+                    if language == 'java':
+                        self.output_panel.append_output("You can now run the program with the Run button (F5)\n")
                 else:
                     self.output_panel.append_output(f"✗ Build failed (exit code: {process.returncode})\n")
                     
                 self.update_statusbar(f"Build finished with exit code {process.returncode}")
+            except FileNotFoundError as e:
+                error_msg = str(e)
+                if 'javac' in error_msg:
+                    self.output_panel.append_output("\n❌ Java compiler not found!\n")
+                    self.output_panel.append_output("Please install Java JDK from: https://www.oracle.com/java/technologies/downloads/\n")
+                elif 'g++' in error_msg or 'gcc' in error_msg:
+                    self.output_panel.append_output("\n❌ C/C++ compiler not found!\n")
+                    self.output_panel.append_output("Please install MinGW or GCC\n")
+                else:
+                    self.output_panel.append_output(f"\nError: {error_msg}\n")
+                self.update_statusbar("Build failed")
             except Exception as e:
                 self.output_panel.append_output(f"\nError: {str(e)}\n")
+                self.update_statusbar("Build failed")
                 
         threading.Thread(target=build_process, daemon=True).start()
         self.update_statusbar(f"Building {os.path.basename(filename)}...")
