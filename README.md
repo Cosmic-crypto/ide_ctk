@@ -128,11 +128,34 @@ The IDE features **intelligent code completion** similar to VS Code:
 
 1. **Launch the IDE**: `python app_ctk.py`
 2. **Use activity bar** - Click 📁 to toggle explorer
-3. **Open files** - Double-click in file explorer or use File menu
-4. **Write your code** with autocomplete and syntax highlighting
-5. **Press F5** or click ▶️ in activity bar to run
-6. **View output** in the bottom OUTPUT panel
-7. **Check status bar** for file info and language
+3. **Create files** - Click 📄 button in explorer or right-click
+4. **Open files** - Double-click in file explorer or use File menu
+5. **Write your code** with autocomplete and syntax highlighting
+6. **Press F5** or click ▶️ in activity bar to run
+7. **View output** in the bottom OUTPUT panel
+8. **Check status bar** for file info and language
+
+### File Management
+
+The IDE includes full file management capabilities directly in the explorer:
+
+**Quick Action Buttons** (in EXPLORER title bar):
+- **📄** - Create new file
+- **📁** - Create new folder
+- **🔄** - Refresh file tree
+
+**Right-Click Context Menu** (anywhere in explorer):
+- **📄 New File** - Create a new file in current directory
+- **📁 New Folder** - Create a new folder
+- **✏️ Rename** - Rename selected file/folder
+- **🗑️ Delete** - Delete selected file/folder (with confirmation)
+- **🔄 Refresh** - Reload the file tree
+
+**How to use:**
+1. **Create a file**: Click 📄 button OR right-click → "New File"
+2. **Enter filename**: Type name with extension (e.g., `script.py`)
+3. **File opens automatically** in editor
+4. **Right-click** on any file/folder to rename or delete
 
 ### VS Code UI Layout
 
@@ -166,10 +189,19 @@ Vertical icon bar with emoji buttons:
 - ⚙️ Settings (at bottom)
 
 ### Sidebar (Left - Gray #252526)
-- **EXPLORER** title bar
+- **EXPLORER** title bar with action buttons
+  - 📄 New File button
+  - 📁 New Folder button
+  - 🔄 Refresh button
 - Tree view file browser
 - 📁 Folders with icons
 - 📄 Files with icons
+- **Right-click context menu**:
+  - 📄 New File
+  - 📁 New Folder
+  - ✏️ Rename
+  - 🗑️ Delete
+  - 🔄 Refresh
 - Collapsible with Explorer button
 
 ### Menu Bar (Top - Gray #252526)
@@ -347,11 +379,10 @@ Built with:
 - **Python** - Programming language
 - **Tkinter** - Base GUI framework
 
+this is completley coded by windsurf AI
+
 Inspired by VS Code, Sublime Text, and Atom.
 
 ---
-
-feel free to edit this code and i will be happy to get any feedback.
-this is completley coded by windsurf AI!
 
 **Enjoy coding with your new CustomTkinter IDE!** 🚀
